@@ -12,7 +12,7 @@ pygame.init()
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 700
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("Stock Trading Simulator v2.4")
+pygame.display.set_caption("Stock Trading Simulator v2.5")
 
 # --- Colors and Fonts ---
 WHITE = (255, 255, 255)
@@ -27,9 +27,8 @@ font = pygame.font.Font(None, 36)
 small_font = pygame.font.Font(None, 28)
 title_font = pygame.font.Font(None, 72)
 
-# --- File Paths and Data ---
+# --- File Paths ---
 DATA_DIR = "data"
-SAVE_FILE = os.path.join(DATA_DIR, "save_game.json")
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
@@ -40,6 +39,7 @@ stock_price = 50.00
 stock_history = deque(maxlen=5000)
 graph_y_offset = 0
 graph_zoom = 1.0
+active_save_file = None
 
 # --- UI Element Classes ---
 class Button:
@@ -59,9 +59,9 @@ class Button:
         return self.rect.collidepoint(pos)
 
 class InputBox:
-    def __init__(self, x, y, width, height):
+    def __init__(self, x, y, width, height, text=''):
         self.rect = pygame.Rect(x, y, width, height)
-        self.text = ""
+        self.text = text
         self.active = False
 
     def handle_event(self, event):
@@ -70,7 +70,7 @@ class InputBox:
         if event.type == pygame.KEYDOWN and self.active:
             if event.key == pygame.K_RETURN: return self.text
             elif event.key == pygame.K_BACKSPACE: self.text = self.text[:-1]
-            elif event.unicode.isdigit(): self.text += event.unicode
+            else: self.text += event.unicode
         return None
 
     def draw(self, surface):
@@ -81,34 +81,32 @@ class InputBox:
         pygame.draw.rect(surface, BLACK, self.rect, 2, border_radius=5)
 
 # --- Game Functions ---
-def save_game():
+def save_game(filename):
+    if not filename: return
+    filepath = os.path.join(DATA_DIR, filename)
     data = {
-        "player_cash": player_cash,
-        "player_shares": player_shares,
-        "stock_price": stock_price,
-        "stock_history": list(stock_history)
+        "player_cash": player_cash, "player_shares": player_shares,
+        "stock_price": stock_price, "stock_history": list(stock_history)
     }
-    with open(SAVE_FILE, 'w') as f:
-        json.dump(data, f)
+    with open(filepath, 'w') as f: json.dump(data, f)
 
-def load_game():
-    global player_cash, player_shares, stock_price, stock_history
-    if os.path.exists(SAVE_FILE):
-        with open(SAVE_FILE, 'r') as f:
+def load_game(filename):
+    global player_cash, player_shares, stock_price, stock_history, active_save_file
+    filepath = os.path.join(DATA_DIR, filename)
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f:
             data = json.load(f)
-            player_cash = data["player_cash"]
-            player_shares = data["player_shares"]
-            stock_price = data["stock_price"]
+            player_cash, player_shares, stock_price = data["player_cash"], data["player_shares"], data["stock_price"]
             stock_history = deque(data["stock_history"], maxlen=5000)
+            active_save_file = filename
         return True
     return False
 
 def log_data():
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_file = os.path.join(DATA_DIR, f"stock_log_{timestamp}.txt")
+    log_file = os.path.join(DATA_DIR, f"log_{active_save_file.replace('.json','')}_{timestamp}.txt")
     with open(log_file, 'w') as f:
-        for price in stock_history:
-            f.write(f"{price}\n")
+        for price in stock_history: f.write(f"{price}\n")
 
 def update_stock_price_func():
     global stock_price
@@ -133,31 +131,65 @@ def sell_shares_func(amount):
         player_shares -= amount
 
 def draw_text_func(text, x, y, color=BLACK, f=font):
-    text_surface = f.render(text, True, color)
-    screen.blit(text_surface, (x, y))
+    screen.blit(f.render(text, True, color), (x, y))
 
-# --- Main Game Screens ---
+# --- Menu Screens ---
+def new_game_menu():
+    global active_save_file
+    input_box = InputBox(SCREEN_WIDTH/2 - 150, SCREEN_HEIGHT/2, 300, 50)
+    create_button = Button(SCREEN_WIDTH/2 - 75, SCREEN_HEIGHT/2 + 70, 150, 50, "Create", GREEN)
+    
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: return None
+            filename = input_box.handle_event(event)
+            if filename:
+                active_save_file = f"{filename}.json"
+                stock_history.clear()
+                stock_history.append(50.0) # Start with default price
+                return "start"
+            if event.type == pygame.MOUSEBUTTONDOWN and create_button.is_clicked(event.pos) and input_box.text:
+                active_save_file = f"{input_box.text}.json"
+                stock_history.clear()
+                stock_history.append(50.0)
+                return "start"
+
+        screen.fill(DARK_GRAY)
+        draw_text_func("Enter New Game Name:", SCREEN_WIDTH/2 - 150, SCREEN_HEIGHT/2 - 50, WHITE)
+        input_box.draw(screen)
+        create_button.draw(screen)
+        pygame.display.flip()
+        clock.tick(30)
+
+def load_game_menu():
+    save_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json')]
+    buttons = [Button(SCREEN_WIDTH/2 - 150, 150 + i * 60, 300, 50, f.replace('.json',''), BLUE) for i, f in enumerate(save_files)]
+    
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: return None
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                for i, button in enumerate(buttons):
+                    if button.is_clicked(event.pos):
+                        if load_game(save_files[i]):
+                            return "start"
+        
+        screen.fill(DARK_GRAY)
+        draw_text_func("Select Save File", SCREEN_WIDTH/2 - 150, 80, WHITE, title_font)
+        for button in buttons: button.draw(screen)
+        pygame.display.flip()
+        clock.tick(30)
+
 def start_menu():
     new_game_button = Button(SCREEN_WIDTH/2 - 100, SCREEN_HEIGHT/2 - 50, 200, 80, "New Game", GREEN)
     load_game_button = Button(SCREEN_WIDTH/2 - 100, SCREEN_HEIGHT/2 + 50, 200, 80, "Load Game", BLUE)
 
     while True:
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return None # Quit
+            if event.type == pygame.QUIT: return None
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if new_game_button.is_clicked(event.pos):
-                    stock_history.clear()
-                    stock_history.append(stock_price)
-                    return "new"
-                if load_game_button.is_clicked(event.pos):
-                    if load_game():
-                        return "load"
-                    else:
-                        print("No save file found, starting new game.")
-                        stock_history.clear()
-                        stock_history.append(stock_price)
-                        return "new"
+                if new_game_button.is_clicked(event.pos): return new_game_menu()
+                if load_game_button.is_clicked(event.pos): return load_game_menu()
 
         screen.fill(DARK_GRAY)
         draw_text_func("Stock Simulator", SCREEN_WIDTH/2 - 220, SCREEN_HEIGHT/4, WHITE, title_font)
@@ -168,27 +200,22 @@ def start_menu():
 
 def main_game():
     global graph_y_offset, graph_zoom
-    
-    # --- UI Layout ---
     buy_label = font.render("Buy", True, GREEN)
     buy_buttons = [Button(80, SCREEN_HEIGHT - 110, 60, 40, "1", GREEN), Button(150, SCREEN_HEIGHT - 110, 60, 40, "10", GREEN), Button(220, SCREEN_HEIGHT - 110, 60, 40, "50", GREEN), Button(290, SCREEN_HEIGHT - 110, 70, 40, "100", GREEN)]
     custom_buy_input = InputBox(370, SCREEN_HEIGHT - 110, 100, 40)
     custom_buy_button = Button(480, SCREEN_HEIGHT - 110, 100, 40, "Custom", GREEN)
     buy_max_button = Button(590, SCREEN_HEIGHT - 110, 100, 40, "Max", GREEN)
-
     sell_label = font.render("Sell", True, RED)
     sell_buttons = [Button(80, SCREEN_HEIGHT - 60, 60, 40, "1", RED), Button(150, SCREEN_HEIGHT - 60, 60, 40, "10", RED), Button(220, SCREEN_HEIGHT - 60, 60, 40, "50", RED), Button(290, SCREEN_HEIGHT - 60, 70, 40, "100", RED)]
     custom_sell_input = InputBox(370, SCREEN_HEIGHT - 60, 100, 40)
     custom_sell_button = Button(480, SCREEN_HEIGHT - 60, 100, 40, "Custom", RED)
     sell_max_button = Button(590, SCREEN_HEIGHT - 60, 100, 40, "Max", RED)
-
     running = True
     price_update_timer = 0
     
     while running:
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+            if event.type == pygame.QUIT: running = False
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE: running = False
                 if event.key == pygame.K_q: buy_shares_func(10)
@@ -199,12 +226,9 @@ def main_game():
                 if event.key == pygame.K_d: sell_shares_func(100)
                 if event.key == pygame.K_UP: graph_zoom *= 1.1
                 if event.key == pygame.K_DOWN: graph_zoom /= 1.1
-            if event.type == pygame.MOUSEWHEEL:
-                graph_y_offset += event.y * 20
-
+            if event.type == pygame.MOUSEWHEEL: graph_y_offset += event.y * 20
             custom_buy_input.handle_event(event)
             custom_sell_input.handle_event(event)
-
             if event.type == pygame.MOUSEBUTTONDOWN:
                 for i,b in enumerate(buy_buttons): 
                     if b.is_clicked(event.pos): buy_shares_func([1,10,50,100][i])
@@ -226,20 +250,15 @@ def main_game():
             price_update_timer = 0
 
         screen.fill(DARK_GRAY)
-        
-        # --- Draw Graph ---
         graph_rect = pygame.Rect(50, 150, SCREEN_WIDTH - 100, 400)
         pygame.draw.rect(screen, BLACK, graph_rect)
         if len(stock_history) > 1:
             max_len = graph_rect.width
             visible_history = list(stock_history)[-max_len:]
-            
-            max_price = max(visible_history)
-            min_price = min(visible_history)
+            max_price, min_price = max(visible_history), min(visible_history)
             price_range = (max_price - min_price) / graph_zoom if graph_zoom != 0 else 1
             if price_range == 0: price_range = 1
             center_price = (max_price + min_price) / 2
-            
             points = []
             for i, price in enumerate(visible_history):
                 x = graph_rect.x + i
@@ -247,39 +266,33 @@ def main_game():
                 y = graph_rect.centery - normalized_pos * graph_rect.height - graph_y_offset
                 y = max(graph_rect.top, min(graph_rect.bottom, y))
                 points.append((x, y))
-            if len(points) > 1:
-                pygame.draw.lines(screen, BLUE, False, points, 2)
+            if len(points) > 1: pygame.draw.lines(screen, BLUE, False, points, 2)
         pygame.draw.rect(screen, WHITE, graph_rect, 2, border_radius=5)
 
-        # --- Draw UI ---
         draw_text_func(f"Cash: ${player_cash:,.2f}", 20, 20, WHITE)
         draw_text_func(f"Shares: {player_shares}", 20, 60, WHITE)
         draw_text_func(f"Portfolio: ${(player_shares * stock_price):,.2f}", 20, 100, WHITE)
         price_color = GREEN if stock_price >= (stock_history[-2] if len(stock_history) > 1 else stock_price) else RED
         draw_text_func(f"Stock Price: ${stock_price:,.2f}", SCREEN_WIDTH - 320, 20, price_color)
-        
         screen.blit(buy_label, (20, SCREEN_HEIGHT - 115))
         for button in buy_buttons: button.draw(screen)
         custom_buy_input.draw(screen)
         custom_buy_button.draw(screen)
         buy_max_button.draw(screen)
-        
         screen.blit(sell_label, (20, SCREEN_HEIGHT - 65))
         for button in sell_buttons: button.draw(screen)
         custom_sell_input.draw(screen)
         custom_sell_button.draw(screen)
         sell_max_button.draw(screen)
-
         pygame.display.flip()
         clock.tick(60)
 
-    # --- Post-game ---
-    save_game()
+    save_game(active_save_file)
     log_data()
 
 if __name__ == '__main__':
     clock = pygame.time.Clock()
     game_mode = start_menu()
-    if game_mode:
+    if game_mode == "start":
         main_game()
     pygame.quit()
